@@ -149,7 +149,7 @@ module Dnsruby
     NAPTR     = 35      # RFC 2168
     KX        = 36      # RFC 2230
     CERT      = 37      # RFC 2538
-    DNAME     = 39      # RFC 2672
+    DNAME     = 39      # RFC 6672
     OPT       = 41      # RFC 2671
     APL       = 42      # RFC 3123
     DS        = 43      # RFC 4034

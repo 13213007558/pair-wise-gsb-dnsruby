@@ -78,7 +78,7 @@ module Dnsruby
       alias cname= domainname=
     end
 
-    # DNAME RR
+    # DNAME RR (RFC 6672)
     class DNAME < DomainName
       ClassValue = nil #:nodoc: all
       TypeValue = Types::DNAME #:nodoc: all

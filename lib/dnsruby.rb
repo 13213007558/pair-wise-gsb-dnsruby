@@ -15,6 +15,7 @@
 # ++
 require 'dnsruby/code_mappers'
 require 'dnsruby/message/message'
+require 'dnsruby/dname_redirect'
 require 'dnsruby/ipv4'
 require 'dnsruby/ipv6'
 require 'timeout'

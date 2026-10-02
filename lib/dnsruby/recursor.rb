@@ -492,13 +492,16 @@ module Dnsruby
       return known_zone, known_authorities # @TODO@ Need to synchronize access to these!
     end
 
-    def _dorecursion(name, type, klass, known_zone, known_authorities, depth, no_validation) # :nodoc:
+    def _dorecursion(name, type, klass, known_zone, known_authorities,
+                    depth, no_validation, alias_state = nil) # :nodoc:
 
       if ( depth > 255 )
         TheLog.debug(";; _dorecursion() Recursion too deep, aborting...\n")
         @errorstring="Recursion too deep, aborted"
         return nil
       end
+      alias_state ||= { :seen => {}, :hops => 0 }
+      alias_state[:seen][name.to_s.downcase] = true if alias_state[:hops] == 0 && alias_state[:seen].empty?
 
       known_zone = known_zone.sub(/\.*$/, ".")
 
@@ -600,7 +603,8 @@ module Dnsruby
           end
           if (found_auth > 0)
             TheLog.debug(";; _dorecursion() Found #{found_auth} new NS authorities...")
-            return _dorecursion( name, type, klass, known_zone, known_authorities, depth+1)
+            return _dorecursion(name, type, klass, known_zone, known_authorities,
+                               depth + 1, no_validation, alias_state)
           end
           TheLog.debug(";; _dorecursion() No authority information could be obtained.")
           return nil
@@ -655,7 +659,22 @@ module Dnsruby
         status = packet.rcode
         authority = packet.authority
         if (status)
-          if (status == "NXDOMAIN")
+          redirect = follow_dname_redirect(packet, alias_state)
+          if redirect
+            unless redirect.redirect?
+              prepend_alias_records(redirect.response, redirect.records)
+              redirect.response.question[0].qname = packet.question[0].qname
+              return redirect.response
+            end
+            next_zone, next_authorities = get_closest_known_zone_authorities_for(redirect.name)
+            next_packet = _dorecursion(redirect.name, type, klass,
+                                      next_zone, next_authorities,
+                                      depth + 1, no_validation, alias_state)
+            return nil unless next_packet
+            prepend_alias_records(next_packet, redirect.records)
+            next_packet.question[0].qname = packet.question[0].qname
+            return next_packet
+          elsif (status == RCode::NXDOMAIN)
             #  I guess NXDOMAIN is the best we'll ever get
             TheLog.debug(";; _dorecursion() returning NXDOMAIN")
             return packet
@@ -736,9 +755,12 @@ module Dnsruby
               @@mutex.synchronize{
                 @@zones_cache[of]=auth
               }
-              return _dorecursion( name, type, klass, of, auth, depth+1, no_validation)
+              return _dorecursion(name, type, klass, of, auth,
+                                 depth + 1, no_validation, alias_state)
             else
-              return _dorecursion( name, type, klass, known_zone, known_authorities, depth+1, no_validation )
+              return _dorecursion(name, type, klass, known_zone,
+                                 known_authorities, depth + 1,
+                                 no_validation, alias_state)
             end
           end
         end
@@ -775,6 +797,49 @@ module Dnsruby
           end
         }
       }
+    end
+
+    def follow_dname_redirect(packet, alias_state) # :nodoc:
+      return nil if [Types::CNAME, Types::DNAME].include?(packet.question[0].qtype)
+      redirect = DnameRedirect.new.follow(packet)
+      return redirect if redirect.status == :yxdomain
+      return nil unless redirect.redirect?
+
+      target_key = redirect.name.to_s.downcase
+      if alias_state[:seen].key?(target_key)
+        @errorstring = "CNAME/DNAME loop detected"
+        return failure_redirect(packet, redirect, :loop)
+      end
+      if alias_state[:hops] >= DnameRedirect::MAX_REDIRECTS
+        @errorstring = "Too many CNAME/DNAME redirects"
+        return failure_redirect(packet, redirect, :too_many_redirects)
+      end
+
+      alias_state[:seen][target_key] = true
+      alias_state[:hops] += 1
+      redirect
+    rescue ResolvError
+      nil
+    end
+
+    def failure_redirect(packet, redirect, status) # :nodoc:
+      response = packet.clone
+      response.header.rcode = RCode::SERVFAIL
+      Dnsruby::DnameRedirect::Result.new(
+        status: status,
+        name: redirect.name,
+        records: redirect.records,
+        response: response
+      )
+    end
+
+    def prepend_alias_records(packet, records) # :nodoc:
+      records.reverse_each do |record|
+        unless packet.answer.include?(record)
+          packet.answer.unshift(record)
+        end
+      end
+      packet.update_counts
     end
   end
 end
