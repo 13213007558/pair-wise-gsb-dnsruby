@@ -47,6 +47,7 @@ TESTS = %w(
     rr-txt
     rr-unknown
     rrset
+    rfc5011
     rrsig
     svcb
     tkey
@@ -82,4 +83,3 @@ else
   puts "OpenSSL not present (with full functionality) - skipping DS digest test"
   puts "-----------------------------------------------------------------------"
 end
-
