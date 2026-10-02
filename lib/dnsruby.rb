@@ -237,5 +237,6 @@ module Dnsruby
 end
 
 require 'dnsruby/dnssec'
+require 'dnsruby/rfc5011'
 require 'dnsruby/zone_reader'
 require 'dnsruby/resolv'
