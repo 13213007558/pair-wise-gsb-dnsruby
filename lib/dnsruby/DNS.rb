@@ -251,7 +251,24 @@ module Dnsruby
       end
       yielded = false
       n0 = Name.create(name)
+      dname = nil
       msg.each_answer {|rec|
+        if (rec.type == Types.DNAME && n0.subdomain_of?(rec.name))
+          #  RFC 6672 section 2: a DNAME RR redirects every name strictly
+          #  below its owner to the corresponding name below the target.
+          #  The owner name itself is not redirected (subdomain_of? is
+          #  strict, label-aligned and case-insensitive). When several
+          #  DNAME RRs could apply to the same name, the one at the
+          #  closest (longest) ancestor wins.
+          if (dname == nil || rec.name.length > dname.name.length)
+            dname = rec
+          end
+          next
+        end
+        if (dname)
+          n0 = synthesize_cname(n0, dname).domainname
+          dname = nil
+        end
         if n0 == rec.name
           case rec.type
           when type
@@ -264,6 +281,7 @@ module Dnsruby
           end
         end
       }
+      n0 = synthesize_cname(n0, dname).domainname if dname
       return if yielded
       msg.each_answer {|rec|
         if n0 == rec.name
@@ -275,6 +293,32 @@ module Dnsruby
           end
         end
       }
+    end
+
+    #  RFC 6672 section 2: synthesize the CNAME RR which redirects +name+
+    #  (which lies strictly below the DNAME owner) to the corresponding
+    #  name below the DNAME target. The DNAME owner itself is not
+    #  redirected. The synthesized CNAME carries the DNAME's TTL.
+    #  Raises YXDomain if the substituted name would exceed the 255-octet
+    #  wire format limit (RFC 1035 section 2.3.4).
+    def synthesize_cname(name, dname) # :nodoc:
+      name = Name.create(name)
+      prefix = name.labels[0, name.labels.length - dname.name.labels.length]
+      labels = prefix + dname.domainname.labels
+      #  The limit is on the wire form: each label's length octet and
+      #  data, plus the root's zero octet.
+      wire_length = 1
+      labels.each {|label| wire_length += label.length + 1}
+      if (wire_length > Name::MaxNameLength)
+        raise YXDomain.new("DNAME rewrite of #{name.to_s(true)} is #{wire_length} octets, more than the #{Name::MaxNameLength}-octet wire format limit")
+      end
+      return RR.new_from_hash({
+        :name => name,
+        :type => Types.CNAME,
+        :klass => dname.klass,
+        :ttl => dname.ttl,
+        :domainname => Name.new(labels, name.absolute?)
+      })
     end
 
     def send_query(name, type=Types.A, klass=Classes.IN) # :nodoc:
