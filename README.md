@@ -31,6 +31,9 @@ The following is a (non-exhaustive) list of features :
 
 - DNSSEC validation supported
 
+- Optional DNS64 synthesis layer (RFC 6147) with the RFC 6052
+     IPv4-embedded IPv6 address formats; see Dnsruby::DNS64
+
 Dependencies
 ------------
 
