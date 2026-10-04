@@ -20,6 +20,7 @@ Dnsruby.log.level = Logger::FATAL
 
 # We'll prepend 'tc_' and append '.rb' to these:
 TESTS = %w(
+    dns64
     dnskey
     escapedchars
     gpos
@@ -82,4 +83,3 @@ else
   puts "OpenSSL not present (with full functionality) - skipping DS digest test"
   puts "-----------------------------------------------------------------------"
 end
-
