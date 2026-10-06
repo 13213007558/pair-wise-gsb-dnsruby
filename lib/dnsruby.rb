@@ -25,6 +25,7 @@ require 'dnsruby/DNS'
 require 'dnsruby/hosts'
 require 'dnsruby/update'
 require 'dnsruby/zone_transfer'
+require 'dnsruby/zone_digest'
 
 # = Dnsruby library
 # Dnsruby is a thread-aware DNS stub resolver library written in Ruby.

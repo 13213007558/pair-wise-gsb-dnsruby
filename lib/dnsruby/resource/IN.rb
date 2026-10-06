@@ -61,6 +61,7 @@ module Dnsruby
       Types::CAA => CAA,
       Types::SVCB => SVCB,
       Types::HTTPS => HTTPS,
+      Types::ZONEMD => ZONEMD,
     } #:nodoc: all
 
     #  module IN contains ARPA Internet specific RRs

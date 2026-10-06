@@ -52,6 +52,7 @@ TESTS = %w(
     tkey
     update
     zone_reader
+    zonemd
 )
 
 # Omitted:
@@ -75,6 +76,7 @@ def have_open_ssl?
   have_open_ssl
 end
 
+
 if have_open_ssl?
   require_relative 'tc_ds.rb'
 else
@@ -82,4 +84,3 @@ else
   puts "OpenSSL not present (with full functionality) - skipping DS digest test"
   puts "-----------------------------------------------------------------------"
 end
-
