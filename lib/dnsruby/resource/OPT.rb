@@ -28,6 +28,7 @@ module Dnsruby
       IPV4_ADDRESS_FAMILY, IPV6_ADDRESS_FAMILY = ADDRESS_FAMILIES
 
       EDNS_SUBNET_OPTION = 8
+      EDNS_COOKIE_OPTION = 10
 
       #  @TODO@ Add BADVERS to an XRCode CodeMapper object
 
@@ -164,6 +165,22 @@ module Dnsruby
         @options = options
       end
 
+      def cookie
+        return nil if @options.nil?
+        @options.detect { |option| option.code == EDNS_COOKIE_OPTION }
+      end
+
+      def set_cookie(client_cookie, server_cookie = nil)
+        cookie = if client_cookie.is_a?(Cookie)
+          client_cookie
+        else
+          Cookie.new(client_cookie, server_cookie)
+        end
+        other_options = Array(@options).reject { |option| option.code == EDNS_COOKIE_OPTION }
+        @options = (other_options + [cookie]).sort_by(&:code)
+        cookie
+      end
+
       def from_data(data)
         @options = data
       end
@@ -238,7 +255,19 @@ module Dnsruby
 
       def encode_rdata(msg, canonical=false)
         if (@options)
+          cookie_count = 0
           @options.each do |opt|
+            if opt.code == EDNS_COOKIE_OPTION
+              cookie_count += 1
+              if cookie_count > 1
+                raise EncodeError.new("EDNS COOKIE option appears more than once")
+              end
+              begin
+                Cookie.from_wire(opt.data)
+              rescue DecodeError => err
+                raise EncodeError.new(err.message)
+              end unless opt.is_a?(Cookie)
+            end
             msg.put_pack('n', opt.code)
             msg.put_pack('n', opt.data.length)
             msg.put_pack('a*', opt.data)
@@ -249,11 +278,20 @@ module Dnsruby
       def self.decode_rdata(msg)#:nodoc: all
         if (msg.has_remaining?)
           options = []
+          cookie_count = 0
           while (msg.has_remaining?) do
             code  = msg.get_unpack('n')[0]
             len = msg.get_unpack('n')[0]
             data = msg.get_bytes(len)
-            options.push(Option.new(code, data))
+            if code == EDNS_COOKIE_OPTION
+              cookie_count += 1
+              if cookie_count > 1
+                raise DecodeError.new("EDNS COOKIE option appears more than once")
+              end
+              options.push(Cookie.from_wire(data))
+            else
+              options.push(Option.new(code, data))
+            end
           end
         end
         return self.new(0, 0, options)
@@ -264,6 +302,77 @@ module Dnsruby
         def initialize(code, data)
           @code = code
           @data = data
+        end
+      end
+
+      class Cookie < Option
+        CLIENT_COOKIE_LENGTH = 8
+        SERVER_COOKIE_MIN_LENGTH = 8
+        SERVER_COOKIE_MAX_LENGTH = 32
+
+        attr_reader :client_cookie, :server_cookie
+
+        def self.from_wire(data)
+          unless data.is_a?(String)
+            raise DecodeError.new("EDNS COOKIE must be binary data")
+          end
+          data = data.b
+
+          if data.bytesize < CLIENT_COOKIE_LENGTH
+            raise DecodeError.new("EDNS client cookie must be #{CLIENT_COOKIE_LENGTH} bytes")
+          end
+
+          client_cookie = data[0, CLIENT_COOKIE_LENGTH]
+          server_cookie = data[CLIENT_COOKIE_LENGTH..-1]
+          server_cookie = nil if server_cookie && server_cookie.empty?
+          if server_cookie &&
+              !server_cookie.bytesize.between?(SERVER_COOKIE_MIN_LENGTH, SERVER_COOKIE_MAX_LENGTH)
+            raise DecodeError.new(
+              "EDNS server cookie must be #{SERVER_COOKIE_MIN_LENGTH} to #{SERVER_COOKIE_MAX_LENGTH} bytes"
+            )
+          end
+
+          cookie = allocate
+          cookie.instance_variable_set(:@client_cookie, client_cookie)
+          cookie.instance_variable_set(:@server_cookie, server_cookie)
+          cookie.instance_variable_set(
+            :@data,
+            server_cookie && !server_cookie.empty? ? client_cookie + server_cookie : client_cookie
+          )
+          cookie.instance_variable_set(:@code, EDNS_COOKIE_OPTION)
+          cookie
+        end
+
+        def initialize(client_cookie, server_cookie = nil)
+          client_cookie = validate_cookie(client_cookie, CLIENT_COOKIE_LENGTH, CLIENT_COOKIE_LENGTH, "client")
+          if server_cookie
+            server_cookie = validate_cookie(
+              server_cookie,
+              SERVER_COOKIE_MIN_LENGTH,
+              SERVER_COOKIE_MAX_LENGTH,
+              "server"
+            )
+          end
+
+          @client_cookie = client_cookie.dup
+          @server_cookie = server_cookie.nil? ? nil : server_cookie.dup
+          super(EDNS_COOKIE_OPTION, @server_cookie ? @client_cookie + @server_cookie : @client_cookie)
+        end
+
+        private
+
+        def validate_cookie(value, min_length, max_length, name)
+          unless value.is_a?(String)
+            raise ArgumentError.new("EDNS #{name} cookie must be a binary String")
+          end
+          value = value.b
+          unless value.bytesize.between?(min_length, max_length)
+            if min_length == max_length
+              raise ArgumentError.new("EDNS #{name} cookie must be #{min_length} bytes")
+            end
+            raise ArgumentError.new("EDNS #{name} cookie must be #{min_length} to #{max_length} bytes")
+          end
+          value
         end
       end
     end

@@ -71,7 +71,7 @@ module Dnsruby
     #  The port on the resolver to send queries to.
     # 
     #  Defaults to 53
-    attr_accessor :port
+    attr_reader :port
 
     #  Use TCP rather than UDP as the transport.
     # 
@@ -121,6 +121,11 @@ module Dnsruby
     #  dnssec defaults to ON
     attr_reader :dnssec
 
+    #  Generates the 8-byte EDNS client cookie. Called as #call(server, port, context).
+    attr_reader :client_cookie_generator
+
+    MAX_COOKIE_RETRIES = 1
+
     #  Set the source address. If the arg is nil, do nothing
     def src_address6=(arg)
       if (not arg.nil?)
@@ -133,6 +138,20 @@ module Dnsruby
       if (not arg.nil?)
         @src_address = arg
       end
+    end
+
+    def port=(port)
+      return if @port == port
+      @port = port
+      reset_cookie_state if @cookie_mutex
+    end
+
+    def client_cookie_generator=(generator)
+      unless generator.nil? || generator.respond_to?(:call)
+        raise ArgumentError.new("client_cookie_generator must respond to #call")
+      end
+      @client_cookie_generator = generator
+      reset_cookie_state
     end
 
     # Sets the TSIG to sign outgoing messages with.
@@ -166,6 +185,7 @@ module Dnsruby
     def server=(server)
       Dnsruby.log.debug { "InternalResolver setting server to #{server}" }
       @server=Config.resolve_server(server)
+      reset_cookie_state
       check_ipv6
     end
 
@@ -203,6 +223,9 @@ module Dnsruby
       @tcp_pipelining = false
       @tcp_pipelining_max_queries = :infinite
       @use_counts = {}
+      @cookie_mutex = Mutex.new
+      @server_cookie = nil
+      @cookie_retries = {}
 
       ignore_config_resolv_errors = false;
       if arg.nil?
@@ -660,6 +683,9 @@ module Dnsruby
             return false
           end
         end
+        unless check_cookie_response(response, query, client_queue, client_query_id, tcp)
+          return false
+        end
         # end
         #  IF WE GET FORMERR BACK HERE (and we have EDNS0 on) THEN
         #  TRY AGAIN WITH NO OPT RECORDS! (rfc2671 section 5.3)
@@ -685,6 +711,39 @@ module Dnsruby
         end
       end
       return true
+    end
+
+    def check_cookie_response(response, query, client_queue, client_query_id, tcp)
+      query_opt = query.get_opt
+      query_cookie = query_opt && query_opt.cookie
+      return true unless query_cookie
+
+      response_cookie = response.get_opt && response.get_opt.cookie
+      return false unless response_cookie
+      return false unless query_cookie.client_cookie == response_cookie.client_cookie
+      return false unless response_cookie.server_cookie
+
+      if response.rcode == RCode.BADCOOKIE
+        return false if response_cookie.server_cookie.bytesize < 16
+
+        retries = @cookie_mutex.synchronize { @cookie_retries[client_query_id].to_i }
+        return true if retries >= MAX_COOKIE_RETRIES
+
+        @cookie_mutex.synchronize do
+          return false if @cookie_retries[client_query_id].to_i >= MAX_COOKIE_RETRIES
+          @cookie_retries[client_query_id] = retries + 1
+          @server_cookie = response_cookie.server_cookie.dup
+        end
+
+        send_async(query, client_queue, client_query_id, tcp)
+        return false
+      end
+
+      @cookie_mutex.synchronize do
+        @server_cookie = response_cookie.server_cookie.dup
+        @cookie_retries.delete(client_query_id)
+      end
+      true
     end
 
     def check_tsig(query, response, response_bytes)
@@ -735,6 +794,7 @@ module Dnsruby
           #  @TODO@ What if an existing OPT RR is not big enough? Should we replace it?
           add_opt_rr(packet)
         end
+        apply_client_cookie(packet)
       end
 
       if (@tsig && !packet.signed?)
@@ -751,6 +811,53 @@ module Dnsruby
       #  Only one OPT RR allowed per packet - do we already have one?
       if (packet.additional.rrset(packet.question()[0].qname, Types::OPT).rrs.length == 0)
         packet.add_additional(optrr)
+      end
+    end
+
+    def apply_client_cookie(packet)
+      return if @client_cookie_generator.nil?
+      opt = packet.get_opt
+      if opt.nil?
+        opt = RR::OPT.new(udp_packet_size)
+        packet.add_additional(opt)
+      end
+      client_cookie = call_client_cookie_generator
+      server_cookie = @cookie_mutex.synchronize { @server_cookie && @server_cookie.dup }
+      begin
+        opt.set_cookie(client_cookie, server_cookie)
+      rescue ArgumentError => err
+        raise EncodeError.new(err.message)
+      end
+    end
+
+    def call_client_cookie_generator
+      context = {
+        server: @server.to_s,
+        port: @port,
+        use_ipv6: @ipv6,
+        src_address: @ipv6 ? @src_address6 : @src_address
+      }
+      arity = if @client_cookie_generator.respond_to?(:arity)
+        @client_cookie_generator.arity
+      else
+        @client_cookie_generator.method(:call).arity
+      end
+      if arity.zero?
+        @client_cookie_generator.call
+      elsif arity == 1 || arity == -2
+        @client_cookie_generator.call(@server.to_s)
+      elsif arity == 2 || arity == -3
+        @client_cookie_generator.call(@server.to_s, @port)
+      else
+        @client_cookie_generator.call(@server.to_s, @port, context)
+      end
+    end
+
+    def reset_cookie_state
+      return unless @cookie_mutex
+      @cookie_mutex.synchronize do
+        @server_cookie = nil
+        @cookie_retries.clear
       end
     end
 

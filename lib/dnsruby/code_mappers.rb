@@ -32,6 +32,7 @@ module Dnsruby
     BADMODE = 19
     BADNAME = 20
     BADALG = 21
+    BADCOOKIE = 23
 
     update()
   end

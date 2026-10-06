@@ -51,6 +51,7 @@ module Dnsruby
     #  * :udp_size
     #  * :persistent_tcp
     #  * :persistent_udp
+    #  * :client_cookie_generator
     #  * :tsig
     #  * :packet_timeout
     #  * :recurse
@@ -72,6 +73,7 @@ module Dnsruby
       @recurse = true
       @persistent_udp = false
       @persistent_tcp = false
+      @client_cookie_generator = nil
       @retry_times = 1
       @retry_delay = 0
       @single_resolvers = []
@@ -118,7 +120,8 @@ module Dnsruby
           :use_tcp=>@use_tcp, :no_tcp=>@no_tcp, :packet_timeout=>@packet_timeout,
           :tsig => @tsig, :ignore_truncation=>@ignore_truncation,
           :src_address=>@src_address, :src_address6=>@src_address6, :src_port=>@src_port,
-          :recurse=>@recurse, :udp_size=>@udp_size})
+          :recurse=>@recurse, :udp_size=>@udp_size,
+          :client_cookie_generator=>@client_cookie_generator})
 
       @single_resolvers = [isr]
 
@@ -134,7 +137,8 @@ module Dnsruby
           :use_tcp=>@use_tcp, :no_tcp=>@no_tcp, :packet_timeout=>@packet_timeout,
           :tsig => @tsig, :ignore_truncation=>@ignore_truncation,
           :src_address=>@src_address, :src_address6=>@src_address6, :src_port=>@src_port,
-          :recurse=>@recurse, :udp_size=>@udp_size})
+          :recurse=>@recurse, :udp_size=>@udp_size,
+          :client_cookie_generator=>@client_cookie_generator})
 
       @single_res_mutex.synchronize {
         @single_resolvers = [isr]
@@ -169,6 +173,20 @@ module Dnsruby
       @single_res_mutex.synchronize {
         @single_resolvers[0].add_opt_rr(m)
       }
+    end
+
+    attr_reader :client_cookie_generator
+
+    def client_cookie_generator=(generator)
+      unless generator.nil? || generator.respond_to?(:call)
+        raise ArgumentError.new("client_cookie_generator must respond to #call")
+      end
+      @client_cookie_generator = generator
+      @single_res_mutex.synchronize do
+        @single_resolvers.each do |resolver|
+          resolver.client_cookie_generator = generator
+        end
+      end
     end
 
     alias :query_timeout :packet_timeout

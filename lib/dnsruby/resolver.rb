@@ -125,6 +125,9 @@ module Dnsruby
     #  The maximum UDP size to be used
     attr_reader :udp_size
 
+    #  Generates the 8-byte EDNS client cookie. The callable receives server, port, context.
+    attr_reader :client_cookie_generator
+
     #  The current Config
     attr_reader :config
 
@@ -426,6 +429,7 @@ module Dnsruby
     #  * :src_port
     #  * :recurse
     #  * :udp_size
+    #  * :client_cookie_generator
     #  * :config_info - see Config
     #  * :nameserver - can be either a String or an array of Strings
     #  * :packet_timeout
@@ -502,6 +506,7 @@ module Dnsruby
               src_port:           @src_port,
               recurse:            @recurse,
               udp_size:           @udp_size,
+              client_cookie_generator: @client_cookie_generator,
               ignore_config_resolv_errors: true})
         end
       end
@@ -557,6 +562,7 @@ module Dnsruby
       @src_address6 = nil
       @src_port = [0]
       @recurse = true
+      @client_cookie_generator = nil
       @single_res_mutex.synchronize {
         @single_resolvers=[]
       }
@@ -589,7 +595,7 @@ module Dnsruby
     def update_internal_res(res)
       [:port, :use_tcp, :no_tcp, :tcp_pipelining, :tcp_pipelining_max_queries, :tsig, :ignore_truncation, :packet_timeout,
         :src_address, :src_address6, :src_port, :recurse,
-        :udp_size, :dnssec].each do |param|
+        :udp_size, :dnssec, :client_cookie_generator].each do |param|
 
         res.send(param.to_s + '=', instance_variable_get('@' + param.to_s))
       end
@@ -824,6 +830,14 @@ module Dnsruby
 
     def udp_size=(s)
       @udp_size = s
+      update
+    end
+
+    def client_cookie_generator=(generator)
+      unless generator.nil? || generator.respond_to?(:call)
+        raise ArgumentError.new("client_cookie_generator must respond to #call")
+      end
+      @client_cookie_generator = generator
       update
     end
 
