@@ -17,6 +17,7 @@
 
 require 'dnsruby/packet_sender'
 require 'dnsruby/recursor'
+require 'dnsruby/dns64'
 
 module Dnsruby
   #  == Description
@@ -173,6 +174,33 @@ module Dnsruby
     #  requirements.
     attr_accessor :do_validation
 
+    #  The DNS64 configuration for this Resolver (see Dnsruby::DNS64), or nil
+    #  if DNS64 synthesis is disabled (the default).
+    #  When set, an AAAA query made via query() which returns no AAAA records
+    #  is followed up with an A query, and AAAA records are synthesized from
+    #  the A records using the configured Pref64 (RFC 6052, RFC 6147).
+    attr_reader :dns64
+
+    #  Configure DNS64 synthesis. Accepts :
+    #  * true - use the well-known prefix 64:ff9b::/96
+    #  * a String or Array of Strings - Pref64(s) in "prefix/length" form
+    #  * a Hash with :prefixes and optional :ipv4_exclusions
+    #  * a Dnsruby::DNS64 object
+    #  * nil or false - disable DNS64 synthesis
+    def dns64=(value)
+      @dns64 = case value
+        when nil, false then nil
+        when true then DNS64.new
+        when DNS64 then value
+        when String, Array then DNS64.new(value)
+        when Hash
+          DNS64.new(value[:prefixes] || DNS64::WELL_KNOWN_PREFIX,
+            ipv4_exclusions: value[:ipv4_exclusions] || DNS64::DEFAULT_IPV4_EXCLUSIONS)
+        else
+          raise ArgumentError.new("Unsupported dns64 configuration : #{value.inspect}")
+        end
+    end
+
     #  --
     #  @TODO@ add load_balance? i.e. Target nameservers in a random, rather than pre-determined, order?
     #  This is best done when configuring the Resolver, as it will re-order servers based on their response times.
@@ -196,6 +224,9 @@ module Dnsruby
       msg.do_validation = @do_validation
       if @dnssec
         msg.header.cd = set_cd # We do our own validation by default
+      end
+      if @dns64 && msg.question.first && (msg.question.first.qtype == Types::AAAA)
+        return @dns64.resolve(msg) {|m| send_message(m) }
       end
       send_message(msg)
     end
@@ -435,6 +466,7 @@ module Dnsruby
     #  * :do_caching
     #  * :tcp_pipelining
     #  * :tcp_pipelining_max_queries - can be a number or :infinite symbol
+    #  * :dns64 - see Resolver#dns64=
     def initialize(*args)
       #  @TODO@ Should we allow :nameserver to be an RRSet of NS records? Would then need to randomly order them?
       @resolver_ruby = nil
@@ -557,6 +589,7 @@ module Dnsruby
       @src_address6 = nil
       @src_port = [0]
       @recurse = true
+      @dns64 = nil
       @single_res_mutex.synchronize {
         @single_resolvers=[]
       }

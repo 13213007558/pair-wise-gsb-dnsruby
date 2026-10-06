@@ -31,6 +31,8 @@ The following is a (non-exhaustive) list of features :
 
 - DNSSEC validation supported
 
+- Optional DNS64 synthesis (RFC 6147) with configurable Pref64 (RFC 6052)
+
 Dependencies
 ------------
 

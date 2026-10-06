@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* Add optional DNS64 synthesis (RFC 6147) to `Resolver` via `resolver.dns64 = ...` (or the `:dns64` option to `Resolver.new`) - an AAAA query which returns NODATA is followed up with an A query, and AAAA records are synthesized from the A records using the configured Pref64. `Dnsruby::DNS64` supports the RFC 6052 prefix lengths (32, 40, 48, 56, 64 and 96, defaulting to the well-known 64:ff9b::/96) and the RFC 6052 section 3.1 IPv4 exclusion ranges (configurable). Responses which already contain AAAA records, and NXDOMAIN responses, are returned untouched; synthesized responses have the AD bit cleared and a SECURE DNSSEC security level downgraded to INSECURE
+
 * Enforce the 255-octet name limit (RFC 1035 Section 2.3.4, RFC 2181 Section 11) against the wire length rather than the dotted presentation length: names of 256 and 257 wire octets were accepted and encoded into messages, and now raise ResolvError
 * Add support for SVCB (type 64) and HTTPS (type 65) resource records - RFC 9460, including zone file parsing with TargetName origin resolution
   * Recognises the registered SvcParamKey mnemonics `mandatory`, `alpn`, `no-default-alpn`, `port`, `ipv4hint`, `ipv6hint` (RFC 9460), `ech` (RFC 9848), `dohpath` (RFC 9461), `ohttp` (RFC 9540) and `docpath` (RFC 9953). Any other key reads and writes as `keyNNNNN`
@@ -303,4 +305,3 @@
 * Minor bug fixes
 * IPSECKEY RR added
 * Clients can now manipulate Name::Labels
-
