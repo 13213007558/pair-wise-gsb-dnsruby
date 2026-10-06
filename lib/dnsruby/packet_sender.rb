@@ -40,21 +40,21 @@ module Dnsruby
         if (!question.qname.to_s.include? "*")
           #  Now cache response RRSets
           if (query.header.rd)
-            PacketSender.cache_recursive(response);
+            PacketSender.cache_recursive(response, query);
           else
-            PacketSender.cache_authoritative(response);
+            PacketSender.cache_authoritative(response, query);
           end
         end
       end
     end
 
-    def PacketSender.cache_authoritative(answer)
+    def PacketSender.cache_authoritative(answer, query = answer)
       return if !answer.header.aa
-      @@authoritative_cache.add(answer)
+      @@authoritative_cache.add(answer, query)
     end
 
-    def PacketSender.cache_recursive(answer)
-      @@recursive_cache.add(answer)
+    def PacketSender.cache_recursive(answer, query = answer)
+      @@recursive_cache.add(answer, query)
     end
 
     def PacketSender.clear_caches
@@ -114,6 +114,9 @@ module Dnsruby
     #  Defaults to 512
     attr_reader :udp_size
 
+    #  EDNS client subnet to attach to outgoing queries
+    attr_reader :client_subnet
+
     #  The address of the resolver to send queries to
     attr_reader :server
 
@@ -163,6 +166,10 @@ module Dnsruby
       @udp_size = size
     end
 
+    def client_subnet=(subnet)
+      @client_subnet = subnet.nil? ? nil : RR::OPT::ClientSubnet.create(subnet)
+    end
+
     def server=(server)
       Dnsruby.log.debug { "InternalResolver setting server to #{server}" }
       @server=Config.resolve_server(server)
@@ -203,6 +210,7 @@ module Dnsruby
       @tcp_pipelining = false
       @tcp_pipelining_max_queries = :infinite
       @use_counts = {}
+      @client_subnet = nil
 
       ignore_config_resolv_errors = false;
       if arg.nil?
@@ -343,6 +351,7 @@ module Dnsruby
       end
 
       begin
+        add_client_subnet(msg) unless msg.send_raw
         query_packet = make_query_packet(msg, use_tcp)
       rescue EncodeError => err
         Dnsruby.log.error { "#{err}" }
@@ -355,9 +364,9 @@ module Dnsruby
         #  Check the cache!!
         cachedanswer = nil
         if (msg.header.rd)
-          cachedanswer = @@recursive_cache.find(msg.question()[0].qname, msg.question()[0].type)
+          cachedanswer = @@recursive_cache.find_for_message(msg)
         else
-          cachedanswer = @@authoritative_cache.find(msg.question()[0].qname, msg.question()[0].type)
+          cachedanswer = @@authoritative_cache.find_for_message(msg)
         end
         if (cachedanswer)
           TheLog.debug("Sending cached answer to client\n")
@@ -735,6 +744,7 @@ module Dnsruby
           #  @TODO@ What if an existing OPT RR is not big enough? Should we replace it?
           add_opt_rr(packet)
         end
+        add_client_subnet(packet)
       end
 
       if (@tsig && !packet.signed?)
@@ -752,6 +762,14 @@ module Dnsruby
       if (packet.additional.rrset(packet.question()[0].qname, Types::OPT).rrs.length == 0)
         packet.add_additional(optrr)
       end
+    end
+
+    def add_client_subnet(packet)
+      return unless @client_subnet
+
+      opt = packet.get_opt || RR::OPT.new(udp_packet_size)
+      opt.client_subnet = @client_subnet
+      packet.add_additional(opt)
     end
 
     def prepare_for_dnssec(packet)

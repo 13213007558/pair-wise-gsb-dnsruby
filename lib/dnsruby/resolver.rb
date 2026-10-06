@@ -124,6 +124,7 @@ module Dnsruby
 
     #  The maximum UDP size to be used
     attr_reader :udp_size
+    attr_reader :client_subnet
 
     #  The current Config
     attr_reader :config
@@ -426,6 +427,7 @@ module Dnsruby
     #  * :src_port
     #  * :recurse
     #  * :udp_size
+    #  * :client_subnet
     #  * :config_info - see Config
     #  * :nameserver - can be either a String or an array of Strings
     #  * :packet_timeout
@@ -502,6 +504,7 @@ module Dnsruby
               src_port:           @src_port,
               recurse:            @recurse,
               udp_size:           @udp_size,
+              client_subnet:      @client_subnet,
               ignore_config_resolv_errors: true})
         end
       end
@@ -544,6 +547,7 @@ module Dnsruby
       @packet_timeout = DefaultPacketTimeout
       @port = DefaultPort
       @udp_size = DefaultUDPSize
+      @client_subnet = nil
       @dnssec = DefaultDnssec
       @do_caching= true
       @use_tcp = false
@@ -589,7 +593,7 @@ module Dnsruby
     def update_internal_res(res)
       [:port, :use_tcp, :no_tcp, :tcp_pipelining, :tcp_pipelining_max_queries, :tsig, :ignore_truncation, :packet_timeout,
         :src_address, :src_address6, :src_port, :recurse,
-        :udp_size, :dnssec].each do |param|
+        :udp_size, :dnssec, :client_subnet].each do |param|
 
         res.send(param.to_s + '=', instance_variable_get('@' + param.to_s))
       end
@@ -824,6 +828,11 @@ module Dnsruby
 
     def udp_size=(s)
       @udp_size = s
+      update
+    end
+
+    def client_subnet=(subnet)
+      @client_subnet = subnet.nil? ? nil : RR::OPT::ClientSubnet.create(subnet)
       update
     end
 

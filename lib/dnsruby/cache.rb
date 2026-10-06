@@ -29,8 +29,10 @@
 # @TODO@ Max size for cache?
 module Dnsruby
   class Cache # :nodoc: all
-    def initialize()
+    def initialize(time_provider = nil)
     @cache = Hash.new
+    @keys = []
+    @now = time_provider || -> { Time.now }
     @@max_size = 16*1024 # Get this right...
     @mutex = Mutex.new
     end
@@ -40,6 +42,7 @@ module Dnsruby
     def clear()
       @mutex.synchronize {
         @cache = Hash.new
+        @keys = []
       }
     end
     def length
@@ -48,49 +51,104 @@ module Dnsruby
     def Cache.max_size=(length)
        @@max_size = length
     end
-    def add(message)
+    def add(message, query = message)
       q = message.question[0]
-      key = CacheKey.new(q.qname, q.qtype, q.qclass).to_s
-      data = CacheData.new(message)
+      request_q = query.question[0]
+      response_subnet = message.get_opt&.client_subnet
+      request_subnet = query.get_opt&.client_subnet
+
+      if request_subnet
+        return false unless response_subnet&.valid_response_to?(request_subnet)
+        subnet_key = response_subnet.scope_key
+      else
+        return false if response_subnet
+        subnet_key = nil
+      end
+
+      key = [CacheKey.new(request_q.qname, request_q.qtype, request_q.qclass).to_s, subnet_key]
+      data = CacheData.new(message, @now)
       @mutex.synchronize {
         if (@cache[key])
           TheLog.debug("CACHE REPLACE : #{q.qname}, #{q.qtype}\n")
+          @keys.delete(key)
         else
           TheLog.debug("CACHE ADD : #{q.qname}, #{q.qtype}\n")
         end
         @cache[key] = data
+        @keys << key
 
         while @cache.size > @@max_size # keep the cache size reasonable
-          @cache.shift
+          deleted_key = @keys.shift
+          @cache.delete(deleted_key)
         end
       }
+      true
     end
     #  This method "fixes up" the response, so that the header and ttls are OK
     #  The resolver will still need to copy the flags and ID across from the query
     def find(qname, qtype, qclass = Classes.IN)
       qn = Name.create(qname)
       qn.absolute = true
-      key = CacheKey.new(qn, qtype, qclass).to_s
-      @mutex.synchronize {
-        data = @cache[key]
-        if (!data)
-          return nil
+      key = [CacheKey.new(qn, qtype, qclass).to_s, nil]
+      @mutex.synchronize { get_cached(key) }
+    end
+
+    def find_for_message(query)
+      question = query.question[0]
+      qname = Name.create(question.qname)
+      qname.absolute = true
+      base_key = CacheKey.new(qname, question.qtype, question.qclass).to_s
+      subnet = query.get_opt&.client_subnet
+
+      @mutex.synchronize do
+        return get_cached([base_key, nil]) unless subnet
+
+        matching = @keys.select do |item|
+          key, subnet_key = item
+          next false unless key == base_key && subnet_key
+          family, prefix, network_bytes = subnet_key
+          next false unless family == subnet.family && prefix <= subnet.source_prefix
+          query_bytes = subnet.address.hton
+          prefix.times.all? do |bit|
+            byte_index = bit / 8
+            bit_mask = 0x80 >> (bit % 8)
+            (query_bytes.getbyte(byte_index) & bit_mask) ==
+              (network_bytes.getbyte(byte_index) & bit_mask)
+          end
         end
-        if (data.expiration <= Time.now.to_i)
-          @cache.delete(key)
-          TheLog.debug("CACHE lookup stale\n")
-          return nil
+
+        matching.sort_by! { |_key, subnet_key| subnet_key[1] }
+        matching.reverse_each do |key|
+          message = get_cached(key)
+          return message if message
         end
-        m = data.message
-        TheLog.debug("CACHE found\n")
-        return m
-      }
+        nil
+      end
     end
     def Cache.delete(qname, qtype, qclass = Classes.IN)
-      key = CacheKey.new(qname, qtype, qclass)
+      key = [CacheKey.new(qname, qtype, qclass).to_s, nil]
       @mutex.synchronize {
         @cache.delete(key)
+        @keys.delete(key)
       }
+    end
+
+    private
+
+    def get_cached(key)
+      data = @cache[key]
+      unless data
+        return nil
+      end
+      if data.expiration <= @now.call.to_i
+        @cache.delete(key)
+        @keys.delete(key)
+        TheLog.debug("CACHE lookup stale\n")
+        return nil
+      end
+      message = data.message
+      TheLog.debug("CACHE found\n")
+      message
     end
     class CacheKey # :nodoc: all
       attr_accessor :qname, :qtype, :qclass
@@ -124,7 +182,7 @@ module Dnsruby
         #  @TODO@ What do we do about answerfrom, answersize, etc.?
         m.header.aa = false # Anything else to do here?
         #  Fix up TTLs!!
-        offset = (Time.now - @time_stored).to_i
+        offset = (@now.call.to_i - @time_stored)
         m.each_resource {|rr|
           next if rr.type == Types::OPT
           rr.ttl = rr.ttl - offset
@@ -144,12 +202,13 @@ module Dnsruby
         if (min_ttl == 9999999)
           return 0
         end
-        return (Time.now.to_i + min_ttl)
+        return (@now.call.to_i + min_ttl)
       end
-      def initialize(*args)
+      def initialize(message, time_provider = nil)
+        @now = time_provider || -> { Time.now }
         @expiration = 0
-        @time_stored = Time.now.to_i
-        self.message=(args[0])
+        @time_stored = @now.call.to_i
+        self.message=(message)
       end
       def to_s
         return "#{self.message}"

@@ -49,6 +49,7 @@ module Dnsruby
     #  * :src_address6
     #  * :src_port
     #  * :udp_size
+    #  * :client_subnet
     #  * :persistent_tcp
     #  * :persistent_udp
     #  * :tsig
@@ -61,6 +62,7 @@ module Dnsruby
       @query_timeout = @packet_timeout
       @port = Resolver::DefaultPort
       @udp_size = Resolver::DefaultUDPSize
+      @client_subnet = nil
       @dnssec = Resolver::DefaultDnssec
       @use_tcp = false
       @no_tcp = false
@@ -118,7 +120,8 @@ module Dnsruby
           :use_tcp=>@use_tcp, :no_tcp=>@no_tcp, :packet_timeout=>@packet_timeout,
           :tsig => @tsig, :ignore_truncation=>@ignore_truncation,
           :src_address=>@src_address, :src_address6=>@src_address6, :src_port=>@src_port,
-          :recurse=>@recurse, :udp_size=>@udp_size})
+          :recurse=>@recurse, :udp_size=>@udp_size,
+          :client_subnet=>@client_subnet})
 
       @single_resolvers = [isr]
 
@@ -134,7 +137,8 @@ module Dnsruby
           :use_tcp=>@use_tcp, :no_tcp=>@no_tcp, :packet_timeout=>@packet_timeout,
           :tsig => @tsig, :ignore_truncation=>@ignore_truncation,
           :src_address=>@src_address, :src_address6=>@src_address6, :src_port=>@src_port,
-          :recurse=>@recurse, :udp_size=>@udp_size})
+          :recurse=>@recurse, :udp_size=>@udp_size,
+          :client_subnet=>@client_subnet})
 
       @single_res_mutex.synchronize {
         @single_resolvers = [isr]
