@@ -23,6 +23,7 @@ require 'dnsruby/version'
 require 'dnsruby/cache'
 require 'dnsruby/DNS'
 require 'dnsruby/hosts'
+require 'dnsruby/dns64'
 require 'dnsruby/update'
 require 'dnsruby/zone_transfer'
 
