@@ -52,6 +52,7 @@ TESTS = %w(
     tkey
     update
     zone_reader
+    zonemd
 )
 
 # Omitted:

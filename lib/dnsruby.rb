@@ -238,4 +238,5 @@ end
 
 require 'dnsruby/dnssec'
 require 'dnsruby/zone_reader'
+require 'dnsruby/zone_digest'
 require 'dnsruby/resolv'
