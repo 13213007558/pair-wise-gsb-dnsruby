@@ -43,6 +43,7 @@ TESTS = %w(
     res_config
     res_file
     res_opt
+    rfc5011
     rr
     rr-txt
     rr-unknown
@@ -82,4 +83,3 @@ else
   puts "OpenSSL not present (with full functionality) - skipping DS digest test"
   puts "-----------------------------------------------------------------------"
 end
-
