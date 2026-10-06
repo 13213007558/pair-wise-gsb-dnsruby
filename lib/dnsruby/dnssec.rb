@@ -15,6 +15,7 @@
 # ++
 require 'digest/sha2'
 require 'dnsruby/key_cache'
+require 'dnsruby/managed_trust_anchors'
 require 'dnsruby/single_verifier'
 module Dnsruby
 

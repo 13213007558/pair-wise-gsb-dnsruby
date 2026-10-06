@@ -29,6 +29,7 @@ TESTS = %w(
     ipv6
     message
     misc
+    managed_trust_anchors
     name
     naptr
     nsec
@@ -82,4 +83,3 @@ else
   puts "OpenSSL not present (with full functionality) - skipping DS digest test"
   puts "-----------------------------------------------------------------------"
 end
-

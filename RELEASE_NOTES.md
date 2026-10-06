@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+* Add `Dnsruby::ManagedTrustAnchorManager`, an RFC 5011 state machine for managed DNSKEY trust anchors. It accepts caller-validated DNSKEY observations and an explicit clock, reports candidate/valid/revoked state, and can persist state across restarts without resetting hold-down timers; it does not query DNS itself
 * Enforce the 255-octet name limit (RFC 1035 Section 2.3.4, RFC 2181 Section 11) against the wire length rather than the dotted presentation length: names of 256 and 257 wire octets were accepted and encoded into messages, and now raise ResolvError
 * Add support for SVCB (type 64) and HTTPS (type 65) resource records - RFC 9460, including zone file parsing with TargetName origin resolution
   * Recognises the registered SvcParamKey mnemonics `mandatory`, `alpn`, `no-default-alpn`, `port`, `ipv4hint`, `ipv6hint` (RFC 9460), `ech` (RFC 9848), `dohpath` (RFC 9461), `ohttp` (RFC 9540) and `docpath` (RFC 9953). Any other key reads and writes as `keyNNNNN`
@@ -303,4 +304,3 @@
 * Minor bug fixes
 * IPSECKEY RR added
 * Clients can now manipulate Name::Labels
-
