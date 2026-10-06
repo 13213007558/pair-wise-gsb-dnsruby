@@ -29,10 +29,16 @@
 # @TODO@ Max size for cache?
 module Dnsruby
   class Cache # :nodoc: all
-    def initialize()
+    def initialize(clock: nil)
     @cache = Hash.new
+    @clock = clock
     @@max_size = 16*1024 # Get this right...
     @mutex = Mutex.new
+    end
+
+    def clock_now
+      return Time.now unless @clock
+      @clock.respond_to?(:now) ? @clock.now : @clock.call
     end
     def cache
       @cache
@@ -51,7 +57,7 @@ module Dnsruby
     def add(message)
       q = message.question[0]
       key = CacheKey.new(q.qname, q.qtype, q.qclass).to_s
-      data = CacheData.new(message)
+      data = CacheData.new(message, @clock)
       @mutex.synchronize {
         if (@cache[key])
           TheLog.debug("CACHE REPLACE : #{q.qname}, #{q.qtype}\n")
@@ -76,7 +82,7 @@ module Dnsruby
         if (!data)
           return nil
         end
-        if (data.expiration <= Time.now.to_i)
+        if (data.expiration <= clock_now.to_i)
           @cache.delete(key)
           TheLog.debug("CACHE lookup stale\n")
           return nil
@@ -114,7 +120,7 @@ module Dnsruby
     class CacheData # :nodoc: all
       attr_reader :expiration
       def message=(m)
-        @expiration = get_expiration(m)
+        @expiration = get_expiration(m, clock_now)
         @message = Message.decode(m.encode(true))
         @message.cached = true
       end
@@ -124,14 +130,14 @@ module Dnsruby
         #  @TODO@ What do we do about answerfrom, answersize, etc.?
         m.header.aa = false # Anything else to do here?
         #  Fix up TTLs!!
-        offset = (Time.now - @time_stored).to_i
+        offset = (clock_now.to_i - @time_stored).to_i
         m.each_resource {|rr|
           next if rr.type == Types::OPT
           rr.ttl = rr.ttl - offset
         }
         return m
       end
-      def get_expiration(m)
+      def get_expiration(m, now = clock_now)
         #  Find the minimum ttl of any of the rrsets
         min_ttl = 9999999
         m.each_section {|section|
@@ -144,15 +150,23 @@ module Dnsruby
         if (min_ttl == 9999999)
           return 0
         end
-        return (Time.now.to_i + min_ttl)
+        return (now.to_i + min_ttl)
       end
       def initialize(*args)
         @expiration = 0
-        @time_stored = Time.now.to_i
+        @clock = args[1]
+        @time_stored = clock_now.to_i
         self.message=(args[0])
       end
       def to_s
         return "#{self.message}"
+      end
+
+      private
+
+      def clock_now
+        return Time.now unless @clock
+        @clock.respond_to?(:now) ? @clock.now : @clock.call
       end
     end
   end

@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ++
+require 'ipaddr'
+require 'socket'
+
 module Dnsruby
   class RR
     # Class for EDNS pseudo resource record OPT.
@@ -29,6 +32,140 @@ module Dnsruby
 
       EDNS_SUBNET_OPTION = 8
 
+      class ClientSubnet
+        attr_reader :family, :source_prefix, :scope_prefix
+
+        def self.create(address, source_prefix = nil, scope_prefix = nil)
+          case address
+          when ClientSubnet
+            address
+          when IPAddr
+            new(address, source_prefix || address.prefix, scope_prefix)
+          when String
+            address, source_from_string, scope_from_string = address.split('/', 3)
+            scope = scope_prefix.nil? ? (scope_from_string || 0) : scope_prefix
+            new(address, source_prefix || source_from_string, scope)
+          else
+            raise ArgumentError.new("invalid client subnet #{address.inspect}")
+          end
+        end
+
+        def self.decode(data)
+          raise DecodeError.new("EDNS client subnet option is too short") if data.nil? || data.length < 4
+
+          family, source_prefix, scope_prefix = data.unpack('nCC')
+          address_bytes = data[4, data.length - 4] || +''
+          max_prefix = family == RR::OPT::IPV4_ADDRESS_FAMILY ? 32 : 128
+
+          unless RR::OPT::ADDRESS_FAMILIES.include?(family) &&
+              source_prefix <= max_prefix &&
+              scope_prefix <= max_prefix &&
+              scope_prefix <= source_prefix
+            raise DecodeError.new("invalid EDNS client subnet option")
+          end
+
+          expected_length = (source_prefix + 7) / 8
+          unless address_bytes.length == expected_length
+            raise DecodeError.new("EDNS client subnet address length is invalid")
+          end
+
+          address = decode_address(family, address_bytes, max_prefix)
+          subnet = new(address, source_prefix, scope_prefix)
+          unless address_bytes == subnet.send(:wire_address, source_prefix)
+            raise DecodeError.new("EDNS client subnet address has host bits set")
+          end
+          subnet
+        end
+
+        def self.decode_address(family, address_bytes, max_prefix)
+          address_length = max_prefix / 8
+          padded = address_bytes.b + ("\0".b * (address_length - address_bytes.length))
+          IPAddr.new_ntoh(padded)
+        end
+
+        def initialize(address, source_prefix = nil, scope_prefix = 0)
+          address = IPAddr.new(address) if String === address
+          source_prefix = source_prefix.nil? ? address.prefix : Integer(source_prefix)
+          scope_prefix = Integer(scope_prefix)
+
+          @family = address.ipv4? ? RR::OPT::IPV4_ADDRESS_FAMILY : RR::OPT::IPV6_ADDRESS_FAMILY
+          @max_prefix = address.ipv4? ? 32 : 128
+
+          unless source_prefix.between?(0, @max_prefix) && scope_prefix.between?(0, source_prefix)
+            raise ArgumentError.new("invalid EDNS client subnet prefix")
+          end
+
+          @source_prefix = source_prefix
+          @scope_prefix = scope_prefix
+          @source_address = address.mask(source_prefix)
+          @scope_address = address.mask(scope_prefix)
+        end
+
+        def address
+          @source_address.to_s
+        end
+
+        def source_netmask
+          source_prefix
+        end
+
+        def scope_netmask
+          scope_prefix
+        end
+
+        def source_address
+          @source_address.dup
+        end
+
+        def scope_address
+          @scope_address.dup
+        end
+
+        def encode
+          [family, source_prefix, scope_prefix].pack('nCC') + wire_address(source_prefix)
+        end
+
+        def covers?(other)
+          other = self.class.create(other)
+          family == other.family &&
+            scope_prefix <= other.source_prefix &&
+            scope_address.include?(other.source_address)
+        end
+
+        def valid_response_to?(request)
+          request = self.class.create(request)
+          family == request.family &&
+            source_prefix == request.source_prefix &&
+            source_address.to_s == request.source_address.to_s &&
+            scope_prefix <= request.source_prefix
+        end
+
+        def ==(other)
+          other.is_a?(self.class) &&
+            family == other.family &&
+            source_prefix == other.source_prefix &&
+            scope_prefix == other.scope_prefix &&
+            source_address.to_s == other.source_address.to_s
+        end
+        alias eql? ==
+
+        def hash
+          [family, source_address.to_s, source_prefix, scope_prefix].hash
+        end
+
+        def to_s
+          "#{source_address}/#{source_prefix}/#{scope_prefix}"
+        end
+
+        private
+
+        def wire_address(prefix)
+          return +''.b if prefix == 0
+          bytes = @source_address.hton
+          bytes.byteslice(0, (prefix + 7) / 8)
+        end
+      end
+
       #  @TODO@ Add BADVERS to an XRCode CodeMapper object
 
       # Can be called with up to 3 arguments, none of which must be present
@@ -37,6 +174,7 @@ module Dnsruby
       # * OPT.new(size,flags)
       # * OPT.new(size,flags,options)
       def initialize(*args)
+        @name = Name.create('.')
         @type = Types.new('OPT')
         @ttl = nil
 
@@ -55,6 +193,7 @@ module Dnsruby
           end
         else
           self.payloadsize=0
+          self.flags=0
         end
       end
 
@@ -145,7 +284,7 @@ module Dnsruby
         self.klass=Classes.new(size)
       end
 
-      def options(args)
+      def options(args = nil)
         if (args==nil)
           return @options
         elsif args.kind_of?(Integer)
@@ -172,48 +311,23 @@ module Dnsruby
         raise NotImplementedError
       end
 
-      def get_ip_addr(opt, family, source_netmask)
-        pad_format_string = family == IPV4_ADDRESS_FAMILY ? 'x3C' : 'x15C'
-        ip_addr = [0].pack(pad_format_string)
-
-        num_to_copy = (source_netmask + 7) / 8
-        num_to_copy.times { |index| ip_addr[index] = opt.data[index+4] }
-        ip_addr
-      end
-
       def get_client_subnet(opt)
-        family = opt.data[1].unpack('C')[0]
-        return "Unsupported(family=#{family})" unless ADDRESS_FAMILIES.include?(family)
-
-        source_netmask = opt.data[2].unpack('C')[0]
-        scope_netmask = opt.data[3].unpack('C')[0]
-
-        case family
-        when IPV4_ADDRESS_FAMILY
-          return "#{IPAddr::ntop(get_ip_addr(opt,family,source_netmask))}/#{source_netmask}/#{scope_netmask}"
-        when IPV6_ADDRESS_FAMILY
-          new_ipv6 = IPAddr.new(IPAddr::ntop(get_ip_addr(opt,family,source_netmask)), Socket::AF_INET6)
-          return "#{new_ipv6}/#{source_netmask}/#{scope_netmask}"
-        end
+        ClientSubnet.decode(opt.data).to_s
+      rescue DecodeError => error
+        "Unsupported(#{error.message})"
       end
 
       def set_client_subnet(subnet)
-        family = IPV4_ADDRESS_FAMILY
-        scope_netmask = 0
-        ip, source_netmask = subnet.split('/')
-        source_netmask = source_netmask.to_i
-        if subnet == "0.0.0.0/0"
-          edns_client_subnet = RR::OPT::Option.new(
-              EDNS_SUBNET_OPTION, [family, source_netmask, scope_netmask].pack("xcc*"))
-        else
-          ip_address = IPAddr.new(ip)
-          family = IPV6_ADDRESS_FAMILY if ip_address.ipv6?
-          num_addr_bytes = source_netmask / 8
-          num_addr_bytes = num_addr_bytes + 1 if source_netmask % 8 > 0
-          edns_client_subnet = RR::OPT::Option.new(EDNS_SUBNET_OPTION, [family, source_netmask, scope_netmask].pack("xcc*") +
-            ip_address.hton.slice(0, num_addr_bytes))
-        end
-        self.options = [edns_client_subnet]
+        client_subnet = ClientSubnet.create(subnet)
+        option = Option.new(EDNS_SUBNET_OPTION, client_subnet.encode)
+        remaining = (@options || []).reject { |existing| existing.code == EDNS_SUBNET_OPTION }
+        self.options = remaining + [option]
+      end
+
+      def client_subnet
+        return nil if @options.nil?
+        subnet_option = @options.detect { |option| option.code == EDNS_SUBNET_OPTION }
+        subnet_option ? ClientSubnet.decode(subnet_option.data) : nil
       end
 
       def edns_client_subnet
@@ -255,6 +369,10 @@ module Dnsruby
             data = msg.get_bytes(len)
             options.push(Option.new(code, data))
           end
+          if options.count { |option| option.code == EDNS_SUBNET_OPTION } > 1
+            raise DecodeError.new("multiple EDNS client subnet options")
+          end
+          options.each { |option| ClientSubnet.decode(option.data) if option.code == EDNS_SUBNET_OPTION }
         end
         return self.new(0, 0, options)
       end

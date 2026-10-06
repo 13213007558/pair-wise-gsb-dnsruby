@@ -236,6 +236,11 @@ module Dnsruby
   end
 end
 
+require 'dnsruby/ecs_answer_index'
+require 'dnsruby/client_subnet_resolver'
+module Dnsruby
+  ClientSubnet = RR::OPT::ClientSubnet unless const_defined?(:ClientSubnet)
+end
 require 'dnsruby/dnssec'
 require 'dnsruby/zone_reader'
 require 'dnsruby/resolv'
