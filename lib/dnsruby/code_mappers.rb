@@ -32,12 +32,21 @@ module Dnsruby
     BADMODE = 19
     BADNAME = 20
     BADALG = 21
+    BADCOOKIE = 23  # RFC 7873
 
     update()
   end
 
   class ExtendedRCode < CodeMapper
     BADVERS = 16
+    BADCOOKIE = 23  # RFC 7873
+
+    #  Don't let unknown extended rcodes (e.g. from BADCOOKIE or BADVERS
+    #  responses) leak into the Classes mapper - see CodeMapper#unknown_code
+    def unknown_code(arg) #:nodoc: all
+      set_code(arg)
+    end
+
     update()
   end
 

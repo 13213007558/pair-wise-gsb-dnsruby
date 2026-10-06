@@ -116,6 +116,7 @@ module Dnsruby
       @send_raw = false
       @do_validation = true
       @do_caching = true
+      @cookie_retry_count = 0
       @security_level = SecurityLevel.UNCHECKED
       @security_error = nil
       @cached = false
@@ -188,6 +189,11 @@ module Dnsruby
     # cache before sending the query, nor cache the result of the query, then
     # set do_caching to false.
     attr_accessor :do_caching
+
+    #  The number of times this message has been resent in response to a
+    #  BADCOOKIE reply (RFC 7873). Used internally by Dnsruby to bound the
+    #  number of cookie retries - this should not normally be set.
+    attr_accessor :cookie_retry_count
 
     def get_exception
       exception = nil

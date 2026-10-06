@@ -78,6 +78,8 @@ module Dnsruby
       @configured = false
       @do_caching = true
       @config = Config.new
+      @client_cookie_generator = nil
+      @cookie_max_retries = PacketSender::DEFAULT_COOKIE_MAX_RETRIES
 
       if (arg==nil)
         #  Get default config
@@ -118,7 +120,9 @@ module Dnsruby
           :use_tcp=>@use_tcp, :no_tcp=>@no_tcp, :packet_timeout=>@packet_timeout,
           :tsig => @tsig, :ignore_truncation=>@ignore_truncation,
           :src_address=>@src_address, :src_address6=>@src_address6, :src_port=>@src_port,
-          :recurse=>@recurse, :udp_size=>@udp_size})
+          :recurse=>@recurse, :udp_size=>@udp_size,
+          :client_cookie_generator=>@client_cookie_generator,
+          :cookie_max_retries=>@cookie_max_retries})
 
       @single_resolvers = [isr]
 
@@ -134,7 +138,9 @@ module Dnsruby
           :use_tcp=>@use_tcp, :no_tcp=>@no_tcp, :packet_timeout=>@packet_timeout,
           :tsig => @tsig, :ignore_truncation=>@ignore_truncation,
           :src_address=>@src_address, :src_address6=>@src_address6, :src_port=>@src_port,
-          :recurse=>@recurse, :udp_size=>@udp_size})
+          :recurse=>@recurse, :udp_size=>@udp_size,
+          :client_cookie_generator=>@client_cookie_generator,
+          :cookie_max_retries=>@cookie_max_retries})
 
       @single_res_mutex.synchronize {
         @single_resolvers = [isr]

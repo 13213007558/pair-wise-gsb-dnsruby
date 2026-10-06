@@ -28,6 +28,7 @@ module Dnsruby
       IPV4_ADDRESS_FAMILY, IPV6_ADDRESS_FAMILY = ADDRESS_FAMILIES
 
       EDNS_SUBNET_OPTION = 8
+      EDNS_COOKIE_OPTION = 10
 
       #  @TODO@ Add BADVERS to an XRCode CodeMapper object
 
@@ -222,12 +223,22 @@ module Dnsruby
         subnet_option ? get_client_subnet(subnet_option) : nil
       end
 
+      #  Return the COOKIE option (RFC 7873) of this OPT RR, or nil if
+      #  there is none. The returned Option holds the raw wire-format data;
+      #  use Dnsruby::Cookie.decode to interpret it.
+      def cookie_option
+        return nil if @options.nil?
+        @options.detect { |option| option.code == EDNS_COOKIE_OPTION }
+      end
+
       def to_s
         ret = "OPT pseudo-record : payloadsize #{payloadsize}, xrcode #{xrcode.code}, version #{version}, flags #{flags}\n"
         if @options
           @options.each do |opt|
             if opt.code == EDNS_SUBNET_OPTION
               ret = ret + "CLIENT-SUBNET: #{get_client_subnet(opt)}\n"
+            elsif opt.code == EDNS_COOKIE_OPTION
+              ret = ret + "COOKIE: #{opt.data.unpack1('H*')}\n"
             else
               ret = ret + "OPT=#{opt.code}: #{opt.data}\n"
             end

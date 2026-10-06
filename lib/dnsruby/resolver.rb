@@ -173,6 +173,30 @@ module Dnsruby
     #  requirements.
     attr_accessor :do_validation
 
+    #  A callable (e.g. a proc) which generates the client cookie to use
+    #  in DNS Cookie (RFC 7873) exchanges. It is injected by the deployer,
+    #  so that the client cookie can be computed from the client address,
+    #  the server address and a secret according to local policy. It must
+    #  return exactly 8 bytes. If nil (the default), DNS Cookies are not
+    #  used. Server cookies are remembered per-server, and are never
+    #  shared across servers.
+    attr_reader :client_cookie_generator
+
+    #  The maximum number of times a query is resent with an updated
+    #  server cookie after a BADCOOKIE response. Defaults to
+    #  PacketSender::DEFAULT_COOKIE_MAX_RETRIES.
+    attr_reader :cookie_max_retries
+
+    def client_cookie_generator=(generator)
+      @client_cookie_generator = generator
+      update
+    end
+
+    def cookie_max_retries=(max)
+      @cookie_max_retries = max
+      update
+    end
+
     #  --
     #  @TODO@ add load_balance? i.e. Target nameservers in a random, rather than pre-determined, order?
     #  This is best done when configuring the Resolver, as it will re-order servers based on their response times.
@@ -557,6 +581,8 @@ module Dnsruby
       @src_address6 = nil
       @src_port = [0]
       @recurse = true
+      @client_cookie_generator = nil
+      @cookie_max_retries = PacketSender::DEFAULT_COOKIE_MAX_RETRIES
       @single_res_mutex.synchronize {
         @single_resolvers=[]
       }
@@ -589,7 +615,7 @@ module Dnsruby
     def update_internal_res(res)
       [:port, :use_tcp, :no_tcp, :tcp_pipelining, :tcp_pipelining_max_queries, :tsig, :ignore_truncation, :packet_timeout,
         :src_address, :src_address6, :src_port, :recurse,
-        :udp_size, :dnssec].each do |param|
+        :udp_size, :dnssec, :client_cookie_generator, :cookie_max_retries].each do |param|
 
         res.send(param.to_s + '=', instance_variable_get('@' + param.to_s))
       end

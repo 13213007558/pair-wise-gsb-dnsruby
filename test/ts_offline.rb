@@ -21,6 +21,7 @@ Dnsruby.log.level = Logger::FATAL
 # We'll prepend 'tc_' and append '.rb' to these:
 TESTS = %w(
     dnskey
+    cookie
     escapedchars
     gpos
     hash

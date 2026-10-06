@@ -15,12 +15,19 @@
 # ++
 require 'dnsruby/select_thread'
 require 'ipaddr'
+require 'dnsruby/cookie'
 # require 'dnsruby/iana_ports'
 module Dnsruby
 
   class PacketSender # :nodoc: all
 
     include Socket::Constants
+
+    #  The default maximum number of times a query is resent with an
+    #  updated server cookie after a BADCOOKIE response (RFC 7873).
+    #  This bound ensures that a server which keeps challenging the
+    #  client cannot cause an infinite retry loop.
+    DEFAULT_COOKIE_MAX_RETRIES = 2
 
     @@authoritative_cache = Cache.new
     @@recursive_cache = Cache.new
@@ -121,6 +128,35 @@ module Dnsruby
     #  dnssec defaults to ON
     attr_reader :dnssec
 
+    #  A callable (e.g. a proc) which generates the client cookie to use
+    #  in DNS Cookie (RFC 7873) exchanges with this server. It is injected
+    #  by the deployer, so that the client cookie can be computed from the
+    #  client address, the server address and a secret according to local
+    #  policy. It must return exactly 8 bytes.
+    #  If nil (the default), DNS Cookies are not used.
+    attr_reader :client_cookie_generator
+
+    #  The maximum number of times a query is resent with an updated
+    #  server cookie after a BADCOOKIE response. Defaults to
+    #  DEFAULT_COOKIE_MAX_RETRIES.
+    attr_accessor :cookie_max_retries
+
+    #  Set the client cookie generator (see client_cookie_generator).
+    #  Pass nil to disable DNS Cookies.
+    def client_cookie_generator=(generator)
+      if (!generator.nil? && !generator.respond_to?(:call))
+        raise ArgumentError.new('client_cookie_generator must respond to call')
+      end
+      @client_cookie_generator = generator
+    end
+
+    #  The server cookie currently remembered for this server, or nil.
+    #  Server cookies are cached per-server and are never shared across
+    #  servers.
+    def server_cookie
+      @server_cookies[@server.to_s]
+    end
+
     #  Set the source address. If the arg is nil, do nothing
     def src_address6=(arg)
       if (not arg.nil?)
@@ -203,6 +239,9 @@ module Dnsruby
       @tcp_pipelining = false
       @tcp_pipelining_max_queries = :infinite
       @use_counts = {}
+      @client_cookie_generator = nil
+      @cookie_max_retries = DEFAULT_COOKIE_MAX_RETRIES
+      @server_cookies = {}
 
       ignore_config_resolv_errors = false;
       if arg.nil?
@@ -640,6 +679,12 @@ module Dnsruby
           #  Should send error back up to Resolver here, and then NOT QUERY AGAIN!!!
           return sig_value
         end
+        if (@client_cookie_generator &&
+            !check_cookie(query, response, client_queue, client_query_id, tcp))
+          #  The response has been consumed by the cookie processing - it
+          #  was either dropped, or a retry with an updated cookie was sent
+          return false
+        end
         if ((response.header.get_header_rcode == RCode.FORMERR) &&
             (query.header.arcount == 0))
           # Raise an error
@@ -710,6 +755,58 @@ module Dnsruby
       return :okay
     end
 
+    #  Process the COOKIE option (RFC 7873) of a response.
+    #
+    #  Returns true if the response may be delivered to the client, and
+    #  false if it has been consumed : either it was dropped (malformed
+    #  COOKIE option, or a client cookie which does not match the one we
+    #  sent), or a retry carrying the newly learned server cookie was sent
+    #  in response to a BADCOOKIE reply.
+    #
+    #  BADCOOKIE retries are bounded by cookie_max_retries, so a server
+    #  which keeps challenging us cannot cause an infinite loop.
+    def check_cookie(query, response, client_queue, client_query_id, tcp)
+      opt = response.get_opt
+      cookie_option = opt ? opt.cookie_option : nil
+      if (cookie_option)
+        begin
+          cookie = Cookie.decode(cookie_option.data)
+        rescue DecodeError => e
+          Dnsruby.log.error { "Discarding response with malformed COOKIE option : #{e}" }
+          return false
+        end
+        sent_option = (query_opt = query.get_opt) ? query_opt.cookie_option : nil
+        sent_client_cookie = nil
+        if (sent_option)
+          begin
+            sent_client_cookie = Cookie.decode(sent_option.data).client
+          rescue DecodeError
+            sent_client_cookie = nil
+          end
+        end
+        if (sent_client_cookie.nil? || sent_client_cookie != cookie.client)
+          Dnsruby.log.error { 'Discarding response with mismatched client cookie' }
+          return false
+        end
+        #  Remember the server cookie for this server only - cookies are
+        #  never shared across servers
+        if (cookie.server)
+          @server_cookies[@server.to_s] = cookie.server
+        end
+      end
+      if (response.rcode == RCode.BADCOOKIE)
+        if (query.cookie_retry_count < @cookie_max_retries)
+          query.cookie_retry_count += 1
+          Dnsruby.log.debug { "BADCOOKIE response - resending query with updated server cookie (attempt #{query.cookie_retry_count})" }
+          send_async(query, client_queue, client_query_id, tcp)
+          return false
+        else
+          Dnsruby.log.error { 'BADCOOKIE response - cookie retry limit reached, returning response to client' }
+        end
+      end
+      return true
+    end
+
     def make_query(name, type = Types::A, klass = Classes::IN, set_cd=@dnssec)
       msg = Message.new
       msg.header.rd = 1
@@ -735,6 +832,9 @@ module Dnsruby
           #  @TODO@ What if an existing OPT RR is not big enough? Should we replace it?
           add_opt_rr(packet)
         end
+        #  Add the COOKIE option (RFC 7873) if a client cookie generator
+        #  has been injected
+        add_cookie(packet) if @client_cookie_generator
       end
 
       if (@tsig && !packet.signed?)
@@ -752,6 +852,34 @@ module Dnsruby
       if (packet.additional.rrset(packet.question()[0].qname, Types::OPT).rrs.length == 0)
         packet.add_additional(optrr)
       end
+    end
+
+    #  Add (or refresh) the COOKIE option (RFC 7873) on the packet. The
+    #  client cookie is obtained from the injected client_cookie_generator
+    #  (an existing client cookie on the packet is kept across resends),
+    #  and the server cookie remembered for this server - and only this
+    #  server - is appended if we have one.
+    def add_cookie(packet)
+      opt = packet.get_opt
+      if (!opt)
+        add_opt_rr(packet)
+        opt = packet.get_opt
+      end
+      options = opt.options(nil) || []
+      client_cookie = nil
+      existing = options.detect { |option| option.code == Cookie::OPTION_CODE }
+      if (existing)
+        begin
+          client_cookie = Cookie.decode(existing.data).client
+        rescue DecodeError
+          client_cookie = nil
+        end
+      end
+      client_cookie ||= @client_cookie_generator.call
+      cookie = Cookie.new(client_cookie, @server_cookies[@server.to_s])
+      options = options.reject { |option| option.code == Cookie::OPTION_CODE }
+      options.push(RR::OPT::Option.new(Cookie::OPTION_CODE, cookie.encode))
+      opt.options = options
     end
 
     def prepare_for_dnssec(packet)
